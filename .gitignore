@@ -1,0 +1,8 @@
+mosquitto/data/*
+mosquitto/log/*
+
+!mosquitto/data/.gitkeep
+!mosquitto/log/.gitkeep
+
+backend/received_data.json
+.env
