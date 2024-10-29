@@ -1,0 +1,23 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mosquitto-broker
+    user: "${UID}:${GID}"
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+
+  server:
+    build: ./backend
+    container_name: server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/configs:/app/configs
+      - ./backend/received_data.json:/app/received_data.json
