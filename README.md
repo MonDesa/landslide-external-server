@@ -41,10 +41,10 @@ cd landslide-external-server
 
 ### Configuration
 
-Configure the project settings by modifying the necessary files in `go_backend/configs/` and `mosquitto/config/`.
+Configure the project settings by modifying the necessary files in `backend/configs/` and `mosquitto/config/`.
 
 - **MQTT Broker Configuration**: `mosquitto/config/mosquitto.conf`
-- **Go Server Configuration**: Configure paths for any secrets or external files in `go_backend/configs/config.json`
+- **Go Server Configuration**: Configure paths for any secrets or external files in `backend/configs/config.json`
 
 ---
 
