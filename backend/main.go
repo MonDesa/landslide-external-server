@@ -1,73 +1,131 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
+    "encoding/json"
+    "fmt"
+    "io/ioutil"
+    "os"
+    "path/filepath"
+    "time"
 
-	"github.com/gin-gonic/gin"
+    MQTT "github.com/eclipse/paho.mqtt.golang"
+    "github.com/gin-gonic/gin"
 )
 
+type DeviceInfo struct {
+    CommUnitID string `json:"CommUnitID"`
+}
+
+var devices map[string]DeviceInfo
+var devicesFile = "devices.json"
+var mqttClient MQTT.Client
+
 func main() {
-	router := gin.Default()
+    router := gin.Default()
 
-	configDir := "./configs"
+    configDir := "./configs"
+    if _, err := os.Stat(configDir); os.IsNotExist(err) {
+        os.Mkdir(configDir, os.ModePerm)
+    }
 
-	if _, err := os.Stat(configDir); os.IsNotExist(err) {
-		os.Mkdir(configDir, os.ModePerm)
-	}
+    devices = make(map[string]DeviceInfo)
+    loadDevices()
 
-	router.GET("/getConfig", func(c *gin.Context) {
-		commUnitID := c.Query("CommUnitID")
-		if commUnitID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "CommUnitID not provided"})
-			return
-		}
+    initMQTTClient()
 
-		configPath := filepath.Join(configDir, fmt.Sprintf("%s_config.json", commUnitID))
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Config file not found"})
-			return
-		}
+    router.POST("/configs/:commUnitID", updateConfigHandler)
 
-		configData, err := os.ReadFile(configPath)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read config file"})
-			return
-		}
+    router.Run(":5000")
+}
 
-		var config interface{}
-		if err := json.Unmarshal(configData, &config); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid JSON in config file"})
-			return
-		}
+func initMQTTClient() {
+    opts := MQTT.NewClientOptions()
+    opts.AddBroker("tcp://your_mqtt_broker_ip:1883")
+    opts.SetClientID("backend_server")
+    opts.SetUsername("your_mqtt_username")
+    opts.SetPassword("your_mqtt_password")
 
-		c.JSON(http.StatusOK, config)
-	})
+    mqttClient = MQTT.NewClient(opts)
+    if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+        panic(token.Error())
+    }
 
-	router.POST("/postData", func(c *gin.Context) {
-		var data map[string]interface{}
-		if err := c.BindJSON(&data); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
-			return
-		}
+    fmt.Println("Connected to MQTT broker")
+}
 
-		fmt.Printf("Received data: %v\n", data)
+func loadDevices() {
+    if _, err := os.Stat(devicesFile); err == nil {
+        data, err := ioutil.ReadFile(devicesFile)
+        if err == nil {
+            json.Unmarshal(data, &devices)
+        }
+    }
+}
 
-		f, err := os.OpenFile("received_data.json", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write data"})
-			return
-		}
-		defer f.Close()
+func saveDevices() error {
+    devicesBytes, err := json.MarshalIndent(devices, "", "  ")
+    if err != nil {
+        return err
+    }
 
-		dataBytes, _ := json.Marshal(data)
-		f.WriteString(string(dataBytes) + "\n")
+    tempDevicesFile := devicesFile + ".tmp"
+    if err := ioutil.WriteFile(tempDevicesFile, devicesBytes, 0644); err != nil {
+        return err
+    }
 
-		c.JSON(http.StatusOK, gin.H{"status": "Data received"})
-	})
+    return os.Rename(tempDevicesFile, devicesFile)
+}
 
-	router.Run(":5000")
+func updateConfigHandler(c *gin.Context) {
+    commUnitID := c.Param("commUnitID")
+
+    var configData map[string]interface{}
+    if err := c.BindJSON(&configData); err != nil {
+        c.JSON(400, gin.H{"error": "Invalid JSON"})
+        return
+    }
+
+    configPath := filepath.Join("./configs", fmt.Sprintf("%s_config.json", commUnitID))
+    configBytes, err := json.MarshalIndent(configData, "", "  ")
+    if err != nil {
+        c.JSON(500, gin.H{"error": "Failed to marshal config data"})
+        return
+    }
+
+    tempConfigPath := configPath + ".tmp"
+    if err := ioutil.WriteFile(tempConfigPath, configBytes, 0644); err != nil {
+        c.JSON(500, gin.H{"error": "Failed to write temp config file"})
+        return
+    }
+
+    if err := os.Rename(tempConfigPath, configPath); err != nil {
+        c.JSON(500, gin.H{"error": "Failed to save config file"})
+        return
+    }
+
+    topic := fmt.Sprintf("comm_unit/%s/config", commUnitID)
+    token := mqttClient.Publish(topic, 1, false, configBytes)
+    token.Wait()
+    if token.Error() != nil {
+        c.JSON(500, gin.H{"error": "Failed to publish config via MQTT"})
+        return
+    }
+
+    fmt.Printf("Published config to topic %s\n", topic)
+
+    statusTopic := fmt.Sprintf("comm_unit/%s/config/status", commUnitID)
+    statusChan := make(chan string)
+    mqttClient.Subscribe(statusTopic, 1, func(client MQTT.Client, msg MQTT.Message) {
+        statusChan <- string(msg.Payload())
+    })
+
+    select {
+    case statusMsg := <-statusChan:
+        fmt.Printf("Received status from device %s: %s\n", commUnitID, statusMsg)
+        c.JSON(200, gin.H{"status": "Config updated and applied by device", "deviceStatus": statusMsg})
+    case <-time.After(10 * time.Second):
+        c.JSON(500, gin.H{"error": "Timeout waiting for device status"})
+    }
+
+    mqttClient.Unsubscribe(statusTopic)
 }
