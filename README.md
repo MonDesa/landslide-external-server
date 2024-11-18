@@ -1,13 +1,13 @@
 # Landslide External Server
 
-The `landslide-external-server` project is a backend solution to manage data for a landslide monitoring system. It collects, stores, and serves sensor data from communication units via MQTT and HTTP endpoints, providing a way to persist and configure device data for enhanced landslide detection and management.
+The `landslide-external-server` project is a backend solution for a landslide monitoring system. It collects, stores, and manages sensor data from communication units via MQTT, providing a way to persist and configure device data for enhanced landslide detection and management.
 
 ## Overview
 
-This project serves as the external backend for a landslide monitoring system. It consists of two main services:
+This project serves as the external backend for a landslide monitoring system. It consists of two main components:
 
-1. **MQTT Broker** - Manages the reception and persistence of sensor data from communication units (e.g., ESP32 devices).
-2. **Go-based HTTP Server** - Provides endpoints to manage and configure the communication units, such as retrieving and updating device configurations stored in `config.json`.
+1. **MQTT Broker** - Manages the reception, persistence, and distribution of sensor data and configuration updates to communication units (e.g., ESP32 devices).
+2. **Go MQTT Backend** - A Go application that publishes configuration updates to devices via MQTT topics and listens for status updates, ensuring configurations are applied successfully.
 
 ---
 
@@ -15,8 +15,8 @@ This project serves as the external backend for a landslide monitoring system. I
 
 The `landslide-external-server` project runs two main services within Docker containers:
 
-- **Mosquitto MQTT Broker**: A persistent MQTT broker using the Eclipse Mosquitto Docker image, where all sensor data is relayed and stored in a designated volume.
-- **Go HTTP Server**: A REST API built with the Go programming language, which interacts with MQTT and provides configuration endpoints.
+- **Mosquitto MQTT Broker**: A persistent MQTT broker using the Eclipse Mosquitto Docker image, where all sensor data and configuration messages are relayed and stored in a designated volume.
+- **Go MQTT Backend**: A service built with Go that handles publishing configurations to communication units and listens for their status responses via MQTT.
 
 Both services are orchestrated with Docker Compose for easier management and deployment.
 
@@ -26,7 +26,7 @@ Both services are orchestrated with Docker Compose for easier management and dep
 
 ### Requirements
 
-- **Docker** and **Docker Compose** installed on your machine. 
+- **Docker** and **Docker Compose** installed on your machine.
   - [Docker Installation Guide](https://docs.docker.com/get-docker/)
   - [Docker Compose Installation Guide](https://docs.docker.com/compose/install/)
 
@@ -35,16 +35,18 @@ Both services are orchestrated with Docker Compose for easier management and dep
 After installing Docker and Docker Compose, clone this repository:
 
 ```bash
-git clone https://github.com/rubenszinho/landslide-external-server.git
+git clone https://github.com/yourusername/landslide-external-server.git
 cd landslide-external-server
 ```
 
 ### Configuration
 
-Configure the project settings by modifying the necessary files in `backend/configs/` and `mosquitto/config/`.
+Configure the project settings by modifying the necessary files:
 
 - **MQTT Broker Configuration**: `mosquitto/config/mosquitto.conf`
-- **Go Server Configuration**: Configure paths for any secrets or external files in `backend/configs/config.json`
+- **Go MQTT Backend Configuration**: Adjust MQTT broker address, ports, and other settings in the Go code (`backend/main.go`) if necessary.
+
+Ensure that any credentials or sensitive information are securely managed, possibly through environment variables or Docker secrets.
 
 ---
 
@@ -56,7 +58,7 @@ With Docker Compose configured, start the entire project using:
 docker-compose up -d
 ```
 
-This command runs both the Mosquitto broker and the Go HTTP server in detached mode.
+This command runs both the Mosquitto broker and the Go MQTT backend in detached mode.
 
 To stop the containers, use:
 
@@ -70,46 +72,27 @@ docker-compose down
 
 ### MQTT Broker
 
-The Mosquitto MQTT broker runs on port `1883` and stores all incoming messages from sensor units. MQTT clients (e.g., the communication unit) can publish to this broker, which retains data in `./mosquitto/data`.
+The Mosquitto MQTT broker runs on port `1883` and manages all incoming and outgoing messages between the backend and communication units.
 
 - **MQTT Port**: `1883`
 - **MQTT Storage Path**: `./mosquitto/data`
 
-### HTTP Endpoints
+### Communication Units
 
-The Go HTTP server provides a RESTful API to manage device configurations.
+Communication units (e.g., ESP32 devices) connect to the MQTT broker to:
 
-- **Base URL**: `http://localhost:5000`
+- **Publish Sensor Data**: To topics determined by the system design (e.g., `sensors/{sensor_id}/data`).
+- **Subscribe to Configuration Updates**: On their specific topic `comm_unit/{CommUnitID}/config`.
+- **Publish Configuration Status**: To `comm_unit/{CommUnitID}/config/status`.
 
-#### Endpoints
+### Backend Configuration Updates
 
-1. **GET /config**: Fetches the current device configuration.
-2. **POST /config**: Updates the device configuration.
-   - **Payload**: JSON structure matching `config.json` format.
+The Go MQTT backend handles:
 
-Example usage of these endpoints can be tested with tools like `curl` or Postman.
+- **Publishing Configuration Updates**:
 
----
+  - To update a communication unit's configuration, the backend publishes a message to `comm_unit/{CommUnitID}/config`.
 
-## Testing the System
+- **Listening for Status Messages**:
 
-To ensure the MQTT broker and HTTP server are functioning correctly:
-
-1. **MQTT Testing**: Publish and subscribe to topics using tools like `mosquitto_pub` and `mosquitto_sub`.
-   ```bash
-   # Publish test message
-   mosquitto_pub -h localhost -p 1883 -t "test/topic" -m "Hello, Mosquitto!"
-
-   # Subscribe to test topic
-   mosquitto_sub -h localhost -p 1883 -t "test/topic"
-   ```
-2. **HTTP Testing**: Use `curl` or Postman to hit the `/config` endpoints.
-   ```bash
-   # Fetch configuration
-   curl -X GET http://localhost:5000/config
-
-   # Update configuration
-   curl -X POST http://localhost:5000/config -H "Content-Type: application/json" -d @path_to_config_file
-   ```
-
-3. **Persistent Data Check**: Verify that all MQTT messages are stored in `./mosquitto/data`.
+  - The backend subscribes to `comm_unit/{CommUnitID}/config/status` to receive feedback from communication units.
